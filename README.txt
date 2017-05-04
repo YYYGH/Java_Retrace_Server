@@ -12,5 +12,5 @@ KS3_K = {
 	数据段格式 payload = {'appkey': '***', 'version': '****', 'package': '****', 'stacks': "***********************"}
 	其中appkey,version,pakcage,三个key的名称是固定值
 	js = json.dumps(payload)#将数据段转为json
-     	r= requests.post('http://10.20.126.19:8000/index/',json = js)#连接服务器
+     	r= requests.post('http://20.20.126.19:8000/index/',json = js)#连接服务器
 	print 'r.txt: ', r.text #输出服务器返回的数据
