@@ -1,7 +1,6 @@
 #coding: utf8
 #author: lijianjun
 
-import requests
 import traceback
 import md5
 from ks3.connection import Connection
