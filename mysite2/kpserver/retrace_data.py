@@ -1,22 +1,22 @@
 #coding:utf-8
 import re
 import os.path
-import sys
-import subprocess
 import json
 import types
 import hashlib
 import ast
 from configure import *
 import gzip
-from django.shortcuts import render
-from django.core.urlresolvers import reverse
-from django.http import *
-from django.views.decorators.csrf import csrf_exempt
+import logging
 from .proguardks3 import Conn
+logger = logging.getLogger(LOGGING_NAME)
 
 
-
+'''
+根据路径创建目录
+@param    path    指定的路径 
+@return ：成功返回True， 否则返回False
+'''
 def mkdir(path):
     path = path.strip()
     isExists = os.path.exists(path)
@@ -24,11 +24,16 @@ def mkdir(path):
         try:
             os.makedirs(path)
         except:
+            logger.error("retrace_data.py file call function mkdir 26 line error")
             return False
     return True
 
-
-def md5_encryption(string):#使用MD5加密算法加密数据
+'''
+使用MD5加密算法加密数据
+@param string   待加密的字符串
+@return ：成功返回加密后的字符串， 否则返回None
+'''
+def md5_encryption(string):
     m = hashlib.md5()
     if string:
         m.update(string)
@@ -36,7 +41,11 @@ def md5_encryption(string):#使用MD5加密算法加密数据
         return psw
     return None
 
-
+'''
+ 加载分析上下文，将mapping_raw 生成一个字典 
+ @param mapping_raw: mapping 文本,一个字符串
+ @return ：返回一个字典
+'''
 def get_file_path(data, mapping_seletor):#获取文件保存位置,并保存 version, appkey,package三个信息
     version = split_data(data, 'version')#获取版本信息
     appkey = split_data(data, 'appkey')#获取appkey
@@ -50,24 +59,95 @@ def get_file_path(data, mapping_seletor):#获取文件保存位置,并保存 ver
         version = version.lower()
         path = WORK_PATH + appkey + '/' + version + '/' + package + '/'
     except:
+        logger.error("retrace_data.py file call function get_file_path error")
         return None
     res = mkdir(path)#根据路径创建文件
     if res:#创建文件成功
         return path
     return None
 
+'''
+ 加载分析上下文，将mapping_raw 生成一个字典
+ @param mapping_raw: mapping 文本,一个字符串
+ @return ：返回一个字典
+'''
+def load_mapping(mapping_raw):#将mapping一次性读取
+    lis_a = mapping_raw.split("\n")
+    dic_t = {}  # 字典保存结果
+    retrace_class = ""
+    proguard_class = ""
 
-def load_mapping(filename):#将mapping一次性读取
-    try:
-        file_object = open(filename)
-        all_the_text = file_object.readlines()#按行读取文件所有内容，保存到列表中
-        file_object.close()
-    except:
-        return None
-    return all_the_text#返回文件内容列表
+    length = len(lis_a)
+    for i in range(0, length):
+        line = lis_a[i]
+        line = line.rstrip("\n")
+        line = line.strip()
+        if len(line) == 0:
+            continue
+        if line.endswith(":"):  # 找到新类型开始的行
+            lis_t = line.split("->")
+            retrace_class = lis_t[0]  # 保原始的类名
+            retrace_class = retrace_class.strip()
+            proguard_class = lis_t[1]  # 保原混淆后的类名
+            proguard_class = re.findall("\w*.*:", proguard_class)
+            proguard_class = proguard_class[0].replace(":", "")
+            proguard_class = proguard_class.strip()
+            dict_new = {proguard_class: retrace_class}
+            dic_t.update(dict_new)
+        else:
+            if ("(" in line) and ")" in line:  # 函数类型
+                lis_t = line.split("->")
+                str_lis = re.findall(' .*\(', lis_t[0])
+                str_l = str_lis[0]
+                str_l = str_l.replace('(', '')
+                str_l = str_l.strip()
+                lis_l = str_l.split(" ")
+                retracefunc_name = lis_l[len(lis_l) - 1]
+                retracefunc_name = retracefunc_name.strip()  # 原函数名
+                proguardfunc_name = lis_t[1].strip()  # 混淆后的函数名
+                rfunc_name = retrace_class + "." + retracefunc_name  # 原始类名加原始函数名 作为value
+                pfunc_name = proguard_class + "." + proguardfunc_name  # 混淆的类名加混淆的函数名 作为key
+                if pfunc_name in dic_t:  # 已经存在 key
+                    value = dic_t.get(pfunc_name)  # 取出其中对应的value
+                    if value.endswith(")"):  # 多匹配的情况
+                        rfunc_name = value.replace(")", " | " + retracefunc_name + ")")
+                    else:  # 只有一个匹配
+                        rfunc_name = value + "(" + retracefunc_name + ")"
+                dict_new = {pfunc_name: rfunc_name}
+                dic_t.update(dict_new)
+            else:
+                continue
+    return dic_t
 
+'''
+存储字典到文件
+@:param   dict_l   load_mapping 返回的字典
+@:param   path      将要存储的目录
+'''
+def storage_dict(dict_l,path):
+    file_path = path + "mapping.dict"
+    fp = open(file_path, "w")
+    string = json.dumps(dict_l)
+    fp.write(string)
+    fp.close()
 
-def find_file(filename):#到指定目录查找mapping.txt
+'''
+从指定位置读取字典
+@:param   path      mapping.dict 存放的目录
+@:return  返回一个字典
+'''
+def get_dict(path):
+    file_path = path + "mapping.dict"
+    with open(file_path) as fp:
+        string = fp.read()
+    return ast.literal_eval(string)
+
+'''
+从指定位置查找文件
+@:param   filename      文件路径
+@:return  True 找到文件， 否则文件不存在
+'''
+def find_file(filename):#到指定目录查找
     filename = filename.strip()
     FileExists = os.path.exists(filename)
     if FileExists:
@@ -75,50 +155,56 @@ def find_file(filename):#到指定目录查找mapping.txt
     else:
         return False
 
-
+'''
+获取请求数据
+@:param   request    一个request  
+@:return  有数据则返回，否则返回None
+'''
 def getdata(request):#获取post数据
     try:
-        data = request.read()
+        data = request.body
+    except:
+        return None
+    try:  # 将字符串转化为字典
+        data = json.loads(data)
+        data = eval(data)
         return data
     except:
         return None
 
-
+'''
+将data数据转化成字典格式，并从中获取key 值对应的value
+@:param   data    getdata函数返回的数据
+@:param   key     需要获取的值对应的key
+@:return  成功则返回value，否则返回None
+'''
 def split_data(data, key):#根据key获取数据
-    try:#将字符串转化为字典
-        data = ast.literal_eval(data)
-    except:
-        return None
     if type(data) is types.DictionaryType:
         if key in data:
             value = data.get(key, None)
         else:
             return None
         return value
-    else:
-        try:#将字符串转化为字典
-            data = ast.literal_eval(data)
-        except:
-            return None
-    if key in data:
-        value = data.get(key, None)
-    else:
-        return None
-    return value
 
 
 def data_process(request, dictr):#获取数据段
     data = getdata(request)
-    if not data or data.strip() == '':#数据段是否为空
-        data = None
+    if data is None:#数据段是否为空
         dict1 = {'result': 'fail', 'stacks': data, 'reason': 'data is empty'}
         dictr.update(dict1)
+        logger.error("retrace_data.py file call function data_process error %s",
+                     "not have data or data is empty")
         return None
     else:#数据段不为空时执行获取stacks数据
         return data
 
-
-def get_proguarded_data(request, data, dictr):#提取stacks数据段
+'''
+获取stacks 数据段
+@:param   data    getdata函数返回的数据
+@:param   dictr   保存失败信息
+@:return  成功则返回stack数据，否则返回None
+'''
+def get_stacks_data(data, dictr):#提取stacks数据段
     stack = split_data(data, 'stacks')#获取stacks段
     if stack:
         return stack
@@ -128,172 +214,72 @@ def get_proguarded_data(request, data, dictr):#提取stacks数据段
         return None
 
 '''
-获取匹配规则,并返回
-list_rules = [
-            {'proguardclass': strclass, 混淆的类名 
-            'rule': str_rule,           匹配规则 
-            'rawstack': rawstack,       原始stacks数据
-            'result': [],               匹配结果
-            'function': strfunction     函数名
-            },...]
+分析原始stack数据，提取匹配规则
+@:param  rawstack   原始stack数据
+@return 成功返回匹配规则，否则返回None
 '''
-def get_rules(stack):
-    list_rules = []  # 保存混淆规则
-    if type(stack) is types.StringType:  # stacks 是一个字符串
-        rule = get_string_rules(stack)
-        list_rules.append(rule)
-    else:#stacks是一个列表
-        for v in stack: # 循环取出列表中的每一个stack
-            rule = get_string_rules(v)
-            list_rules.append(rule)
-    return list_rules
-
-'''
-{'proguardclass': strclass, 'rule': str_rule, 'rawstack': rawstack, 'result': [], 'function': strfunction}
-    混淆的类名              匹配规则        原始stacks数据         匹配结果         函数名
-'''
-def get_string_rules(rawstack):
-
+def get_rules(rawstack):
     dic_t = {}
     stack = re.findall(r'\w*\.\w*\..*', rawstack)
     if stack:  # 第一次提取匹配字符串成功
         stack = stack[0]
-        if '(' and ')' in stack:
-            stack = re.findall(r'^(.+?)\(', stack)
-            if stack:  # 第二次提取待字符串匹配成功
-                strl = stack[0]
-                length = len(strl)
-                index = strl.rfind('.')
-                strclass = strl[0:index]  # 保存混淆类名
-                strfunction = strl[index + 1:length]  # 保存混淆函数名
-                str_rule = ')' + ' -> ' + strfunction
-                dic_t = {'proguardclass': strclass, 'rule': str_rule, 'rawstack': rawstack, 'result': [], 'function': strfunction}
-            else: # stacks无效
-                dic_t = {'proguardclass': None, 'rule': None, 'rawstack': rawstack, 'result': []}
+        if ('(' in stack) and (')' in stack):  # 含有()的类型
+            str_rule = re.findall(r'^(.+?)\(', stack)
+            if str_rule:  # 第二次提取待匹配字符串成功
+                return str_rule[0]
+            else:  # stacks无效
+                return None
         else:
-            length = len(stack)
-            index = stack.rfind('.')
-            strclass = stack[0:index]  # 保存混淆类名
-            strfunction = stack[index + 1:length]  # 保存混淆函数名
-            str_rule = ')' + ' -> ' + strfunction
-            dic_t = {'proguardclass': strclass, 'rule': str_rule, 'rawstack': rawstack, 'result': [], 'function': strfunction}
+            return stack
     else:  # stacks无效
-        dic_t = {'proguardclass': None, 'rule': None, 'rawstack': rawstack, 'result': []}
-    return dic_t
+        return None
+
+'''	
+分析一行堆栈数据
+@param line: 待分析的一条堆栈数据
+@param dict_l：load_mapping  返回的 字典
+#@return   成功返回被回溯的line, 否则返回原始数据 line
+'''
+def deobfuscate(dict_l, line):
+    key = get_rules(line)#获取匹配规则
+    result = ""
+    try:
+        result = dict_l.get(key)#获取回溯值
+    except:
+        return line
+    if result is None:
+        return line
+    line = line.replace(key, result)#将混淆值替换为回溯值
+    return line
 
 
-def match_string(file_content, rules):#第一个参数是文件内容，第二个参数是匹配规则列表
-    length = len(file_content)
-    for i in range(0, length):#循环从列表中取出文件内容
-        line = file_content[i]
-        line = line.rstrip('\n')#去掉最后一个字符'\n'
-        line = line.strip()#去掉空格符
-        if len(line) == 0:
-            continue
-        for r_dict in rules:#循环从rules中取出匹配规则
-            rawstack = r_dict['rawstack']#stacks原始数据
-            rule = r_dict['rule']#匹配规则
-            proguardclass = r_dict['proguardclass']#混淆的类名
-            if (proguardclass is None) or (rule is None):#如果匹配类名或者匹配规则为None,则结束本次循环
-                continue
-            else:
-                strend = proguardclass + ':'
-                if line.endswith(strend):#先根据被混淆的类名找到开始匹配的位置
-                    start_index = i#保存起始位置下标
-                    lis_t = line.split('->')
-                    retrace_class = lis_t[0]#保存混淆前的类名
-                    retrace_class = retrace_class.strip()
-                    while i < length - 1:
-                        i = i + 1
-                        line = file_content[i]
-                        line = line.rstrip('\n')  # 去掉最后一个字符'\n'
-                        line = line.strip()
-                        if len(line) == 0:
-                            continue
-                        if line.endswith(':'):  # 另一种类型
-                            end_index = i#保存结束位置下标
-                            i = i - 1
-                            rules = search(file_content, start_index, end_index, proguardclass, rules, retrace_class)#传入匹配范围下标
-                            break
-                else:
-                    continue
-        i = i + 1
-    return rules
 
-def search(file_content, start_index, end_index, proguardclass, rules, retrace_class):
-    dict_1 = {'retrace_class': retrace_class}#保存混淆之前的类名
-    for i in range(start_index, end_index):#范围匹配
-        for r_dic in rules:#从规则列表中取出，存放在字典中的匹配信息
-            if r_dic['proguardclass'] == proguardclass:#判断当前规则 proguardclass 值是否为需要匹配的 proguardclass 值
-                line = file_content[i]
-                line = line.rstrip('\n')#去结尾换行符
-                line = line.strip()#去空格
-                rule = r_dic['rule']
-                result = r_dic['result']
-                if 'retrace_class' not in r_dic:#字典中无类名就更新
-                    r_dic.update(dict_1)
-                if line.endswith(rule):#此字符串是否以 rule结尾
-                    line1 = re.findall(' .*\(', line)
-                    str4 = str(line1[0])
-                    str5 = str4.replace('(', '')
-                    str5 = str5.strip()
-                    str5 = str5.split(' ')
-                    leng = len(str5)
-                    result.append(str(str5[leng - 1]))#保存匹配结果（原函数名）
-            else:
-                continue
-    return rules
+def search(path,stacks):
+    file_path_dict = path+"mapping.dict"
+    file_path_mapp = path + MAPPING_FILENAME
+    res = find_file(file_path_dict)
+    list_result = []
+    dict_l = {}
+    if res is False:#指定路径下没有mapping.dict文件
+        with open(file_path_mapp) as fp:
+            dict_l = load_mapping(fp.read())
+        storage_dict(dict_l, path)#存储mapping.dict 文件下次直接加载
+    mapp_dict = get_dict(path)#获取mapping.dict里面的内容
+    if type(stacks) is types.StringType:#只有一条stack数据 是字符串
+        result = deobfuscate(mapp_dict, stacks)#获取反混淆的内容
+        return result
+    else:#stacks是一个列表
+        for stack in stacks:
+            result = deobfuscate(mapp_dict, stack)  # 获取反混淆的内容
+            list_result.append(result)
+        return list_result
 
 
-def arrange_result(rules):#整理匹配结果
-    match_result = []#保存匹配结果
-    for r_dict in rules:#取出所有结果进行整理
-        if len(r_dict['result']) == 0:#如果结果为0个,说明没有匹配，则保存原始数据
-            stack = r_dict['rawstack']  # 得到stacks
-            try:
-                proguardclass = r_dict['proguardclass']#混淆的类名
-                classname = r_dict['retrace_class']#混淆之前的类名
-                stack = stack.replace(proguardclass, classname)#如果有classname就成功替换，替换失败直接执行append
-            except:
-                match_result.append(r_dict['rawstack'])
-                continue
-            match_result.append(r_dict['rawstack'])
-        else:
-            if len(r_dict['result']) == 1:#如果结果只有一个
-                match = r_dict['result']#保存结果，列表
-                stack = r_dict['rawstack']#得到stacks
-                func = r_dict['function']#被混淆的函数名
-                proguardclass = r_dict['proguardclass']#混淆后的类名
-                classname = r_dict['retrace_class']#混淆之前的类名
-                strl = str(match[0])
-                strl = strl.strip()
-                strl = str(strl)
-                strold = proguardclass + '.' + func#混淆后的类名+函数名
-                strnew = classname + '.' + strl#混淆之前的类名和函数名
-                stack = stack.replace(strold, strnew)#将混淆的类名和函数名替换为混淆之前的名字
-                match_result.append(stack)#保存匹配结果到列表中
-            else:#多个匹配结果
-
-                match = r_dict['result']  # 保存结果，列表
-                stack = r_dict['rawstack']  # 得到stacks原始数据
-                func = r_dict['function']  # 被混淆的函数名
-                proguardclass = r_dict['proguardclass']#混淆后的类名
-                classname = r_dict['retrace_class']#混淆之前的类名
-                strl = match[0] #先取出第一个匹配结果
-                length = len(match)#获取匹配记过里的表的长度
-                for i in range(1, length):#将其余匹配以 (*** | *** | ***)格式保存
-                    if i == 1:
-                        strl = strl + '(' + str(match[i])
-                    else:
-                        strl = strl + ' | ' + str(match[i])
-                strl = strl + ')'
-                strl1 = classname + '.' + strl#混淆之前的类名和所有可能的函数名
-                str2 = proguardclass + '.' + func#混淆后的类名+函数名
-                stack = stack.replace(str2, strl1)
-                match_result.append(stack)
-    return match_result
-
-
+'''	
+处理一条request
+@param   request   一个request
+#@return           返回查找结果
+'''
 def Request(request):#处理请求
     dic_tr = {}
     mapping_selector = {}
@@ -301,33 +287,36 @@ def Request(request):#处理请求
     if data is None:  # data 为空
         dictjson = json.dumps(dic_tr)
         return dictjson
-    stack = get_proguarded_data(request, data, dic_tr)  #获取stacks数据段
-    if stack is None:
+    stacks = get_stacks_data(data, dic_tr)  #获取stacks数据段
+    if stacks is None:
         dictjson = json.dumps(dic_tr)
         return dictjson
     path = get_file_path(data, mapping_selector)  # 获取文件所在目录,和 mapping文件信息
     if path is None:
-        dic_t = {'result': 'fail', 'stacks': stack, 'reason': 'No search directory or create directory fail'}
+        dic_t = {'result': 'fail', 'stacks': stacks, 'reason': 'No search directory or create directory fail'}
         dictjson = json.dumps(dic_t)
         return dictjson
-    rules = get_rules(stack)  # 获取匹配规则
     file_path = path + MAPPING_FILENAME#指定文件路径
     res = find_file(file_path)  # 指定路径下查找 mapping.txt文件
     if res is False:  # 在指定路径下找不到mapping.txt
         # 根据mapping信息从金山云上获取mapping.txt,保存到path路径下
         res_ks3 = get_mapping_from_ks3(path, mapping_selector)
         if res_ks3 is None:  # 从金山云获取数据失败
-            dic_t = {'result': 'fail', 'stacks': stack, 'reason': 'request ks3 fail'}
+            dic_t = {'result': 'fail', 'stacks': stacks, 'reason': 'request ks3 fail'}
             dictjson = json.dumps(dic_t)
             return dictjson
-    all_file_context = load_mapping(file_path)  # 读取mapping.tx文件
-    rule = match_string(all_file_context, rules)  # 获取匹配结果
-    res = arrange_result(rule)  # 整理结果
-    dic_t = {'result': 'successful', 'stacks': res}
+
+    result = search(path, stacks)
+    dic_t = {'result': 'successful', 'stacks': result}
     dictjson = json.dumps(dic_t)
     return dictjson
 
-
+'''	
+从金山云上获取mapping压缩数据，加压后保存在指定目录下，保存为 mapping.txt
+@param     path    文件保存的路径
+@:param    mapping_selector   一个字典，包含mapping.txt 对应的version，appkey，package
+#@return      成功返回文件保存的目录，否则返回None
+'''
 def get_mapping_from_ks3(path, mapping_selector):#从金山云上获取数据,保存在path路径下
     connect = Conn(KS3_K["AK"], KS3_K["SK"], "kss.ksyun.com", KS3_K['PROGUARD_BUCKET_NAME'])
     version = mapping_selector['version']
@@ -344,13 +333,21 @@ def get_mapping_from_ks3(path, mapping_selector):#从金山云上获取数据,�
     else:
         return None
 
-
+'''
+把从金山云获取的mapping压缩文件解压为mapping.txt
+@:param     gzfile    要解压的文件路径
+@:param     dst       解压结果保存的文件路径  
+'''
 def gunzipfile(gzfile, dst):
     fin = gzip.open(gzfile, 'rb')
     fout = open(dst, 'wb')
     in_out(fin, fout)
 
-
+'''
+把mapping解压的内容写入文件
+@:param     fin    解压结果
+@:param     fout   要保存的文件 
+'''
 def in_out(fin, fout):
     BufSize = 1024 * 8
     while True:

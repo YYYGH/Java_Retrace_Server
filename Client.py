@@ -76,42 +76,13 @@ def data():
 	
 		js = json.dumps(val)
 		
-		#r3 =requests.post('http://127.0.0.1:8000/index/',json = js)
-		r3 =requests.post('http://10.20.126.19:8000/index/',json = js)
+		r3 =requests.post('http://20.20.126.19:8000/index/',json = js)
 		print "******************************************************************\n"
 		print 'r3.txt: ', r3.text
 		
 	print "________________________________________________________________________________________________________________________________\n"	
-	for val in list:
-	
-		js = json.dumps(val)
-		r3 =requests.post('http://10.20.97.14:8000/index/',json = js)
-		#r3 =requests.post('http://10.20.126.19:8000/index/',json = js)
-		print "******************************************************************\n"
-		print 'r3.txt: ', r3.text	
-	#js = json.dumps(list[0])
-	#r3 = requests.post("http://127.0.0.1:8000/index/",json = js)	
-	
-	#r3 =requests.post('http://10.20.97.14:8000/index/',json = payload)
-	#r3 =requests.post('http://10.20.126.19:8000/index/',json = payload)
-	
-	print "******************************************************************\n"
-	#print 'r3.txt: ', r3.text
-	
-	#print 'r2.headers: ', r2.headers
-'''	
-	print r1.status, r1.reason      #打印响应码和响应状态信息 
 
-	try: 
-	  data1 = r1.read()         #读响应内容 
-	except: 
-	  print "exception!" 
-	finally: 
-	  print "read response!" 
-	print "data1:", data1               #打印响应内容 
-	#print 'header: ',r1.getheader
-	conn.close() 
-'''
+
 def main():
 	data()
 	
