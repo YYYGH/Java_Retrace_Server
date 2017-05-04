@@ -51,9 +51,9 @@ if __name__ == '__main__':
   class TestKs3Yun(unittest.TestCase):
     def setUp(self):
       KS3 ={
-         "AK": "LZGEzlI8FzeVLM+Dxam9",
-         "SK": "hySg7p4D/epwsp9vJmiuPG+IE54g7EtKiRWs3kFa",
-         "PROGUARD_BUCKET_NAME": "crasheye-proguard"
+         "AK": "***********************",
+         "SK": "****************************",
+         "PROGUARD_BUCKET_NAME": "*********************"
       }
       self.mapping_selector = {
         "version": '0.0.1',
